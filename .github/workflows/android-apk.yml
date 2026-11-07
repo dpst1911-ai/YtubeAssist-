@@ -1,5 +1,4 @@
-name: Build Android APK
-
+name: Build Android APK (reviewed)
 on:
   workflow_dispatch:
   push:
@@ -7,6 +6,7 @@ on:
     paths:
       - '.github/workflows/android-apk.yml'
       - 'source_bundle.tar.xz.base64'
+      - 'hardening/**'
 
 permissions:
   contents: read
@@ -21,10 +21,17 @@ jobs:
         run: |
           set -euo pipefail
           base64 --decode source_bundle.tar.xz.base64 > source_bundle.tar.xz
-          echo '4c080071fabd11a1949786c586c4c07733f96552deb2ecaa3d2a137e6555b03b  source_bundle.tar.xz' | sha256sum -c -
+          echo '4c080071fabd11a1949786c4c07733f96552deb2ecaa3d2a137e6555b03b  source_bundle.tar.xz' | sha256sum -c -
           tar -xJf source_bundle.tar.xz
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
+      - name: Apply reviewed permission and consent hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check hardening/reviewed_v1.2.0.patch
+          git apply hardening/reviewed_v1.2.0.patch
+          python3 hardening/security_audit.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -37,20 +44,29 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Test Java logic and source structure
+      - name: Unit tests and structural gates
         run: |
           bash scripts/test_core.sh
           python3 scripts/test_structure.py
-      - name: Build installable debug APK
+          python3 hardening/security_audit.py
+      - name: Build debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
-      - name: Verify generated APK
+      - name: Verify APK packaging and signature
+        shell: bash
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          file app/build/outputs/apk/debug/app-debug.apk
-          sha256sum app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$APK" | tee permissions.txt
+          ! grep -E 'uses-permission:.*(INTERNET|READ_SMS|RECEIVE_SMS|READ_CONTACTS|READ_EXTERNAL_STORAGE)' permissions.txt
+          sha256sum "$APK" | tee apk.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: YTWatchAssist-Android-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: YTWatchAssist-v1.2.0-Reviewed-Debug-APK
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            apk.sha256
+            permissions.txt
           if-no-files-found: error
           retention-days: 30
