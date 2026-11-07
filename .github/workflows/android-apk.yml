@@ -21,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           base64 --decode source_bundle.tar.xz.base64 > source_bundle.tar.xz
-          echo '4c080071fabd11a1949786c4c07733f96552deb2ecaa3d2a137e6555b03b  source_bundle.tar.xz' | sha256sum -c -
+          echo '4c080071fabd11a1949786c586c4c07733f96552deb2ecaa3d2a137e6555b03b  source_bundle.tar.xz' | sha256sum -c -
           tar -xJf source_bundle.tar.xz
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
