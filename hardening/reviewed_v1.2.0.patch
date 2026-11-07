@@ -1,0 +1,138 @@
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -10,8 +10,8 @@
+         applicationId 'com.ytwatch.assist'
+         minSdk 30
+         targetSdk 35
+-        versionCode 2
+-        versionName '1.1.0'
++        versionCode 3
++        versionName '1.2.0'
+     }
+ 
+     compileOptions {
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -2,6 +2,7 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+     <application
+         android:allowBackup="false"
++        android:usesCleartextTraffic="false"
+         android:icon="@drawable/ic_app"
+         android:label="@string/app_name"
+         android:supportsRtl="true"
+--- a/app/src/main/java/com/ytwatch/assist/AppPreferences.java
++++ b/app/src/main/java/com/ytwatch/assist/AppPreferences.java
+@@ -9,17 +9,30 @@
+     private static final String BLACK = "black_recovery";
+     private static final String SPEED = "speed_1_5";
+     private static final String QUALITY = "quality_144";
++    private static final String CONSENT = "explicit_accessibility_consent_v2";
++    private static final String SCREENSHOT_CONSENT = "explicit_screenshot_consent_v2";
+ 
+     private AppPreferences() { }
+     private static SharedPreferences prefs(Context c) {
+         return c.getSharedPreferences(FILE, Context.MODE_PRIVATE);
+     }
+     public static boolean autoSkip(Context c) { return prefs(c).getBoolean(SKIP, true); }
+-    public static boolean blackRecovery(Context c) { return prefs(c).getBoolean(BLACK, true); }
++    public static boolean blackRecovery(Context c) {
++        return hasConsent(c) && prefs(c).getBoolean(BLACK, false)
++                && prefs(c).getBoolean(SCREENSHOT_CONSENT, false);
++    }
+     public static boolean speed(Context c) { return prefs(c).getBoolean(SPEED, true); }
+     public static boolean quality(Context c) { return prefs(c).getBoolean(QUALITY, true); }
+     public static void setAutoSkip(Context c, boolean v) { prefs(c).edit().putBoolean(SKIP, v).apply(); }
+-    public static void setBlackRecovery(Context c, boolean v) { prefs(c).edit().putBoolean(BLACK, v).apply(); }
++    public static void setBlackRecovery(Context c, boolean v) {
++        prefs(c).edit().putBoolean(BLACK, v).putBoolean(SCREENSHOT_CONSENT, v).apply();
++    }
++    public static boolean hasConsent(Context c) { return prefs(c).getBoolean(CONSENT, false); }
++    public static void setConsent(Context c, boolean allowed) {
++        SharedPreferences.Editor editor = prefs(c).edit().putBoolean(CONSENT, allowed);
++        if (!allowed) editor.putBoolean(SCREENSHOT_CONSENT, false);
++        editor.apply();
++    }
+     public static void setSpeed(Context c, boolean v) { prefs(c).edit().putBoolean(SPEED, v).apply(); }
+     public static void setQuality(Context c, boolean v) { prefs(c).edit().putBoolean(QUALITY, v).apply(); }
+ }
+--- a/app/src/main/java/com/ytwatch/assist/MainActivity.java
++++ b/app/src/main/java/com/ytwatch/assist/MainActivity.java
+@@ -32,13 +32,28 @@
+         body.addView(text("فقط هنگام باز بودن YouTube فعال می‌شود و خارج از آن عملی انجام نمی‌دهد.", 16));
+         status = text("", 17);
+         body.addView(status);
++        body.addView(text("دسترسی حساس: این برنامه پس از تأیید شما فقط کنترل‌های قابل‌مشاهده YouTube را برای تشخیص Skip و تغییر سرعت/کیفیت می‌خواند و لمس خودکار انجام می‌دهد. "
++            + "برای بازیابی تصویر سیاه، در صورت روشن‌کردن گزینه مربوطه، نمونه‌هایی از تصویر صفحه موقتاً در حافظه پردازش می‌شوند. "
++            + "هیچ متن یا تصویری ذخیره یا از دستگاه خارج نمی‌شود. این برنامه مجوز اینترنت ندارد. "
++            + "می‌توانید هر لحظه سرویس را از تنظیمات Accessibility خاموش کنید.", 15));
+ 
+         addCheck(body, "تشخیص و فشردن هر دکمه حاوی Skip", AppPreferences.autoSkip(this), AppPreferences::setAutoSkip);
+         addCheck(body, "تنظیم سرعت ویدئو روی 1.5x", AppPreferences.speed(this), AppPreferences::setSpeed);
+         addCheck(body, "تنظیم کیفیت ویدئو روی 144p (در صورت وجود)", AppPreferences.quality(this), AppPreferences::setQuality);
+-        addCheck(body, "بازیابی تصویر سیاه با جلو رفتن ۱۰ ثانیه", AppPreferences.blackRecovery(this), AppPreferences::setBlackRecovery);
++        addCheck(body, "رضایت به نمونه‌برداری موقت از تصویر صفحه برای بازیابی سیاهی (۱۰ ثانیه)",
++                AppPreferences.blackRecovery(this), AppPreferences::setBlackRecovery);
++
++        CheckBox consent = new CheckBox(this);
++        consent.setText("موافقم: دسترسی محدود به YouTube و کلیک خودکار را فعال می‌کنم");
++        consent.setChecked(AppPreferences.hasConsent(this));
++        body.addView(consent);
+ 
+         Button enable = new Button(this);
++        enable.setEnabled(AppPreferences.hasConsent(this));
++        consent.setOnCheckedChangeListener((button, checked) -> {
++            AppPreferences.setConsent(this, checked);
++            enable.setEnabled(checked);
++        });
+         enable.setText("فعال‌سازی دسترسی Accessibility");
+         enable.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+         body.addView(enable);
+--- a/app/src/main/java/com/ytwatch/assist/YouTubeAssistService.java
++++ b/app/src/main/java/com/ytwatch/assist/YouTubeAssistService.java
+@@ -57,7 +57,8 @@
+     }
+ 
+     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
+-        if (event == null || !YOUTUBE.contentEquals(event.getPackageName())) return;
++        if (event == null || !AppPreferences.hasConsent(this)
++                || !YOUTUBE.contentEquals(event.getPackageName())) return;
+         if (!handler.hasCallbacks(tick)) handler.postDelayed(tick, 220);
+     }
+ 
+@@ -88,6 +89,7 @@
+     }
+ 
+     private void scan() {
++        if (!AppPreferences.hasConsent(this)) { stopActivity(); return; }
+         AccessibilityNodeInfo root = getRootInActiveWindow();
+         if (!isYouTube(root)) { stopActivity(); return; }
+         if (!active) {
+@@ -317,6 +319,7 @@
+     }
+ 
+     private void capturePlayer(Rect player) {
++        if (!AppPreferences.hasConsent(this) || !isYouTube(getRootInActiveWindow())) return;
+         lastScreenshot = SystemClock.uptimeMillis();
+         screenshotPending = true;
+         final Rect target = new Rect(player);
+@@ -325,11 +328,18 @@
+                 @Override public void onSuccess(ScreenshotResult result) {
+                     screenshotPending = false;
+                     screenshotFailures = 0;
+-                    if (!active || !watching || !AppPreferences.blackRecovery(YouTubeAssistService.this)) return;
++                    // Always close the returned buffer even if YouTube loses focus
++                    // or the user revokes consent while the screenshot is in flight.
+                     HardwareBuffer buffer = result.getHardwareBuffer();
+                     if (buffer == null) return;
+                     Bitmap bitmap = null;
+                     try {
++                        if (!active || !watching
++                                || !AppPreferences.blackRecovery(YouTubeAssistService.this)
++                                || !isYouTube(getRootInActiveWindow())) {
++                            recoveryGate.reset();
++                            return;
++                        }
+                         bitmap = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
+                         if (bitmap == null) return;
+                         boolean black = BlackFrameDetector.isNearlyBlack(samplePlayer(bitmap, target));
