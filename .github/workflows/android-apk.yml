@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           base64 --decode hardening/v2_patch_xz.base64 | xz --decompress > v2.patch
-          echo '38f76983302d5387fee369c14644009e45eba9c790f28ad1c19756146dfbe109  v2.patch' | sha256sum -c -
+          echo '244da14aad5e8183bbc0f83979ace5bf8a1b3217e68f5460669ff4959a1192e2  v2.patch' | sha256sum -c -
           git apply --check v2.patch
           git apply v2.patch
           python3 hardening/security_audit.py
